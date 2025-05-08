@@ -1,9 +1,9 @@
 """
-build_backend.py – creates the C++ Extension objects and a custom build_ext
-so setuptools can find NumPy headers automatically.
+build_backend.py  –  creates the C++ Extension objects and wraps build_ext
+to add NumPy headers automatically.
 
 If PYBKT_ALLOW_PYTHON_FALLBACK=1 is set, no extensions are built and the
-package falls back to pure Python.
+wheel is pure-Python.
 """
 from pathlib import Path
 import os, platform, sys
@@ -13,12 +13,14 @@ from setuptools.command.build_ext import build_ext
 
 # ---------------------------------------------------------------------------
 
-def _mac_find_libomp():
-    """Return (include_dir, lib_dir) for Homebrew libomp (Apple silicon & Intel)."""
+PROJECT_ROOT = Path(__file__).parent.resolve()
+
+def _mac_find_libomp() -> tuple[str | None, str | None]:
+    """Return (include_dir, lib_dir) for Homebrew libomp on macOS."""
     if platform.system() != "Darwin":
         return None, None
-    default = Path("/opt/homebrew/opt/libomp")  # also works on Intel (Rosetta)
-    import shutil, subprocess
+    default = Path("/opt/homebrew/opt/libomp")
+    import subprocess, shutil
     if shutil.which("brew"):
         try:
             prefix = Path(subprocess.check_output(
@@ -27,12 +29,12 @@ def _mac_find_libomp():
             prefix = default
     else:
         prefix = default
-    return prefix / "include", prefix / "lib"
+    return str(prefix / "include"), str(prefix / "lib")
 
 # ---------------------------------------------------------------------------
 
 class CustomBuildExtCommand(build_ext):
-    """Adds NumPy's C headers to the include path automatically."""
+    """Add NumPy include path automatically."""
     def finalize_options(self):
         super().finalize_options()
         import numpy as np
@@ -40,38 +42,39 @@ class CustomBuildExtCommand(build_ext):
 
 # ---------------------------------------------------------------------------
 
-INCLUDE_DIRS   = ["source-cpp/pyBKT/Eigen", get_paths()["include"]]
-LIBRARY_DIRS   = []
-EXTRA_COMPILE  = ["-fPIC", "-w", "-O3"]
-EXTRA_LINK     = []
-LIBRARIES      = ["pthread", "dl", "util", "m"]
+INCLUDE_DIRS  = [
+    str(PROJECT_ROOT / "source-cpp/pyBKT/Eigen"),
+    get_paths()["include"],
+]
+LIBRARY_DIRS  = []
+EXTRA_COMPILE = ["-fPIC", "-w", "-O3"]
+EXTRA_LINK    = []
+LIBRARIES     = ["pthread", "dl", "util", "m"]
 
 if platform.system() == "Darwin":
+    # Apple clang
     EXTRA_COMPILE += ["-Xpreprocessor", "-fopenmp", "-stdlib=libc++"]
     EXTRA_LINK    += ["-stdlib=libc++", "-fopenmp"]
     omp_inc, omp_lib = _mac_find_libomp()
     if omp_inc and omp_lib:
-        INCLUDE_DIRS.append(str(omp_inc))
-        LIBRARY_DIRS.append(str(omp_lib))
+        INCLUDE_DIRS.append(omp_inc)
+        LIBRARY_DIRS.append(omp_lib)
         LIBRARIES.append("omp")
 else:
     EXTRA_COMPILE += ["-fopenmp"]
     EXTRA_LINK    += ["-fopenmp"]
 
-INCLUDE_DIRS = [p for p in INCLUDE_DIRS if p]
-LIBRARY_DIRS = [p for p in LIBRARY_DIRS if p]
-
-def _ext(src: str, module_name: str) -> Extension:
-    """Factory for Extension objects with shared flags."""
+def _ext(src_rel: str, module_name: str) -> Extension:
+    """Factory for Extension objects with the shared flags."""
     return Extension(
         module_name,
-        [src],
-        include_dirs      = INCLUDE_DIRS,
-        library_dirs      = LIBRARY_DIRS + [sys.exec_prefix + "/lib"],
-        libraries         = LIBRARIES,
-        extra_compile_args= EXTRA_COMPILE,
-        extra_link_args   = EXTRA_LINK,
-        language          = "c++",
+        [str(PROJECT_ROOT / src_rel)],
+        include_dirs       = INCLUDE_DIRS,
+        library_dirs       = LIBRARY_DIRS + [sys.exec_prefix + "/lib"],
+        libraries          = LIBRARIES,
+        extra_compile_args = EXTRA_COMPILE,
+        extra_link_args    = EXTRA_LINK,
+        language           = "c++",
     )
 
 ext_modules = [
@@ -83,7 +86,7 @@ ext_modules = [
          "pyBKT.fit.predict_onestep_states"),
 ]
 
-# Optional pure-Python wheel
+# Optional pure-Python build
 if os.getenv("PYBKT_ALLOW_PYTHON_FALLBACK") == "1":
     ext_modules = []
 
