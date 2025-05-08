@@ -16,6 +16,30 @@ from distutils.command.build_ext import build_ext
 
 sys.tracebacklimit = 0
 
+def _mac_find_libomp():
+    """
+    Return (include_dir, lib_dir) for Homebrew libomp.
+    Falls back to the default keg location if `brew` is not on PATH.
+    """
+    default = "/opt/homebrew/opt/libomp"
+    if platform.system() != "Darwin":
+        return None, None
+
+    import subprocess, shutil
+    if shutil.which("brew"):
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix", "libomp"], text=True
+            ).strip()
+        except subprocess.CalledProcessError:
+            prefix = default
+    else:
+        prefix = default
+
+    inc = os.path.join(prefix, "include")
+    lib = os.path.join(prefix, "lib")
+    return inc, lib
+
 class CustomBuildExtCommand(build_ext):
     """build_ext command for use when numpy headers are needed."""
     """ https://stackoverflow.com/questions/2379898/make-distutils-look-for-numpy-header-files-in-the-correct-place """
@@ -28,17 +52,26 @@ FILES = {'synthetic_data_helper.cpp': 'source-cpp/pyBKT/generate/',
          'predict_onestep_states.cpp': 'source-cpp/pyBKT/fit/', 
          'E_step.cpp': 'source-cpp/pyBKT/fit/'}
 
+INCLUDE_DIRS = sys.path + ['source-cpp/pyBKT/Eigen/', get_paths()['include']]
+LIBRARY_DIRS = [os.environ['LD_LIBRARY_PATH']] if 'LD_LIBRARY_PATH' in os.environ \
+                                               else []
 if platform.system() == 'Darwin':
-    ALL_COMPILE_ARGS = ['-c', '-fPIC', '-w', '-O3', '-stdlib=libc++', '-Xpreprocessor', '-fopenmp']
+    ALL_COMPILE_ARGS = [
+        '-c', '-fPIC', '-w', '-O3',
+        '-stdlib=libc++',                 # C++ runtime
+        '-Xpreprocessor', '-fopenmp'      # OpenMP on Apple clang
+    ]
     ALL_LINK_ARGS = ['-stdlib=libc++']
     ALL_LIBRARIES = ['pthread', 'dl', 'util', 'm', 'omp']
+
+    inc, lib = _mac_find_libomp()
+    if inc and lib:
+        INCLUDE_DIRS.append(inc)
+        LIBRARY_DIRS.append(lib)
 else:
     ALL_COMPILE_ARGS = ['-c', '-fPIC', '-w', '-fopenmp', '-O2']
     ALL_LINK_ARGS = ['-fopenmp']
     ALL_LIBRARIES = ['pthread', 'dl', 'util', 'm']
-INCLUDE_DIRS = sys.path + ['source-cpp/pyBKT/Eigen/', get_paths()['include']]
-LIBRARY_DIRS = [os.environ['LD_LIBRARY_PATH']] if 'LD_LIBRARY_PATH' in os.environ \
-                                               else []
 def clean():
     global LIBRARY_DIRS, ALL_LIBRARIES
     LIBRARY_DIRS = [i for i in LIBRARY_DIRS if i != ""]
